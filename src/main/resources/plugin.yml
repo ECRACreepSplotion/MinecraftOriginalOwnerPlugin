@@ -1,0 +1,16 @@
+name: OwnershipTracker
+version: 4.2.0
+main: com.kodari.ownershiptracker.OwnershipTrackerPlugin
+api-version: '1.21.11'
+author: CreepSplotion
+description: Tracks the rightful owner and transfer history of valuable equipment.
+commands:
+  ownership:
+    description: Manage item ownership and stolen-item tracking.
+    usage: /ownership <transfer|accept|reject|history|track|values>
+    aliases: [owner, ownershiptracker]
+    permission: ownershiptracker.use
+permissions:
+  ownershiptracker.use:
+    description: Allows using ownership commands.
+    default: true
