@@ -10,21 +10,27 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.java.JavaPlugin;
+import net.kyori.adventure.text.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class OwnershipManager {
     private static final String ORIGINAL_STATUS = "§aOriginal";
     private static final String STOLEN_STATUS = "§cStolen";
     private static final String RETURN_PREFIX = "§7Return to §f";
+    private static final String EGG_TIMER_PREFIX = "§6Dragon Egg: §f";
+    private static final int EGG_SECONDS = 24 * 60 * 60;
 
     private final JavaPlugin plugin;
     private final NamespacedKey ownerIdKey;
     private final NamespacedKey ownerNameKey;
     private final NamespacedKey historyKey;
     private final NamespacedKey itemIdKey;
+    private final NamespacedKey eggHolderKey;
+    private final NamespacedKey eggRemainingKey;
 
     public OwnershipManager(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -32,6 +38,8 @@ public final class OwnershipManager {
         this.ownerNameKey = new NamespacedKey(plugin, "owner-name");
         this.historyKey = new NamespacedKey(plugin, "ownership-history");
         this.itemIdKey = new NamespacedKey(plugin, "item-id");
+        this.eggHolderKey = new NamespacedKey(plugin, "dragon-egg-holder");
+        this.eggRemainingKey = new NamespacedKey(plugin, "dragon-egg-remaining");
     }
 
     public JavaPlugin getPlugin() {
@@ -53,6 +61,7 @@ public final class OwnershipManager {
                 || type.equals("SHIELD")
                 || type.equals("TRIDENT")
                 || type.equals("SPEAR") || type.endsWith("_SPEAR")
+                || type.equals("DRAGON_EGG")
                 || type.equals("WOLF_ARMOR");
     }
 
@@ -114,6 +123,10 @@ public final class OwnershipManager {
         data.set(historyKey, PersistentDataType.STRING, serializeHistory(history));
         data.set(ownerIdKey, PersistentDataType.STRING, to.getUniqueId().toString());
         data.set(ownerNameKey, PersistentDataType.STRING, to.getName());
+        if (isDragonEgg(item)) {
+            data.remove(eggHolderKey);
+            data.remove(eggRemainingKey);
+        }
         item.setItemMeta(meta);
         refreshDisplay(item, from.getUniqueId());
         return true;
@@ -185,13 +198,21 @@ public final class OwnershipManager {
         List<String> lore = meta.hasLore() && meta.getLore() != null
                 ? new ArrayList<>(meta.getLore())
                 : new ArrayList<>();
-        lore.removeIf(line -> line.equals(ORIGINAL_STATUS) || line.equals(STOLEN_STATUS) || line.startsWith(RETURN_PREFIX));
+        lore.removeIf(line -> line.equals(ORIGINAL_STATUS) || line.equals(STOLEN_STATUS)
+                || line.startsWith(RETURN_PREFIX) || line.startsWith(EGG_TIMER_PREFIX));
 
         if (owner.id().equals(viewerId)) {
             lore.add(0, ORIGINAL_STATUS);
         } else {
             lore.add(0, RETURN_PREFIX + owner.name());
             lore.add(0, STOLEN_STATUS);
+            if (isDragonEgg(item)) {
+                Integer remaining = meta.getPersistentDataContainer().get(eggRemainingKey, PersistentDataType.INTEGER);
+                if (remaining != null) {
+                    lore.add(EGG_TIMER_PREFIX + String.format("%02dh %02dm %02ds",
+                            remaining / 3600, remaining / 60 % 60, remaining % 60));
+                }
+            }
         }
 
         meta.setLore(lore);
@@ -206,9 +227,159 @@ public final class OwnershipManager {
                 claimIfUnowned(item, player);
                 player.getInventory().setItem(slot, item);
             } else {
+                updateEggHolder(item, player);
                 refreshDisplay(item, player.getUniqueId());
+                if (isDragonEgg(item)) {
+                    player.getInventory().setItem(slot, item);
+                }
             }
         }
+    }
+
+    public void tickDragonEggInventory(Player player) {
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (!isDragonEgg(item)) {
+                continue;
+            }
+            OwnerInfo owner = getOwner(item);
+            if (owner == null) {
+                continue;
+            }
+            updateEggHolder(item, player);
+            if (owner.id().equals(player.getUniqueId())) {
+                player.getInventory().setItem(slot, item);
+                continue;
+            }
+
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            PersistentDataContainer data = meta.getPersistentDataContainer();
+            int remaining = Math.max(0, data.getOrDefault(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS) - 1);
+            data.set(eggRemainingKey, PersistentDataType.INTEGER, remaining);
+            item.setItemMeta(meta);
+            if (remaining == 0) {
+                transferDragonEgg(item, owner, player);
+            } else if (remaining % 600 == 0) {
+                leakEggLocation(owner, player);
+            }
+            refreshDisplay(item, player.getUniqueId());
+            player.getInventory().setItem(slot, item);
+        }
+    }
+
+    public void notifyPendingEggLoss(Player player) {
+        String path = "pending-egg-loss." + player.getUniqueId();
+        if (plugin.getConfig().getBoolean(path)) {
+            player.sendMessage("§cThe Dragon Egg is no longer yours to take");
+            plugin.getConfig().set(path, null);
+            plugin.saveConfig();
+        }
+    }
+
+    private boolean isDragonEgg(ItemStack item) {
+        return item != null && item.getType().name().equals("DRAGON_EGG");
+    }
+
+    private void updateEggHolder(ItemStack item, Player player) {
+        if (!isDragonEgg(item)) {
+            return;
+        }
+        OwnerInfo owner = getOwner(item);
+        if (owner == null) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        if (owner.id().equals(player.getUniqueId())) {
+            if (data.has(eggHolderKey, PersistentDataType.STRING)
+                    || data.has(eggRemainingKey, PersistentDataType.INTEGER)) {
+                data.remove(eggHolderKey);
+                data.remove(eggRemainingKey);
+                item.setItemMeta(meta);
+            }
+        } else if (!player.getUniqueId().toString().equals(data.get(eggHolderKey, PersistentDataType.STRING))) {
+            data.set(eggHolderKey, PersistentDataType.STRING, player.getUniqueId().toString());
+            data.set(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS);
+            item.setItemMeta(meta);
+        }
+    }
+
+    private void transferDragonEgg(ItemStack item, OwnerInfo previous, Player holder) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        List<OwnerInfo> history = new ArrayList<>(getHistory(item));
+        history.add(previous);
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        data.set(historyKey, PersistentDataType.STRING, serializeHistory(history));
+        data.set(ownerIdKey, PersistentDataType.STRING, holder.getUniqueId().toString());
+        data.set(ownerNameKey, PersistentDataType.STRING, holder.getName());
+        data.remove(eggHolderKey);
+        data.remove(eggRemainingKey);
+        item.setItemMeta(meta);
+
+        Player oldOwner = Bukkit.getPlayer(previous.id());
+        if (oldOwner != null && oldOwner.isOnline()) {
+            oldOwner.sendMessage("§cThe Dragon Egg is no longer yours to take");
+        } else {
+            plugin.getConfig().set("pending-egg-loss." + previous.id(), true);
+            plugin.saveConfig();
+        }
+        Location location = getLastKnownLocation(previous.id());
+        if (location != null) {
+            holder.sendMessage("§eThe Dragon Egg is now yours. " + previous.name() + " is at " + formatLocation(location) + ".");
+        } else {
+            holder.sendMessage("§eThe Dragon Egg is now yours. " + previous.name() + "'s location is unknown.");
+        }
+    }
+
+    private void leakEggLocation(OwnerInfo owner, Player holder) {
+        holder.sendMessage("§cYou feel like you're being watched");
+        Player originalOwner = Bukkit.getPlayer(owner.id());
+        if (originalOwner == null || !originalOwner.isOnline()) {
+            return;
+        }
+        Location location = holder.getLocation();
+        if (holder.getActivePotionEffects().stream().noneMatch(effect -> effect.getType().getName().equalsIgnoreCase("INVISIBILITY"))) {
+            originalOwner.sendMessage("§eYour Dragon Egg is at " + formatLocation(location) + ", held by " + holder.getName());
+            return;
+        }
+
+        int obscuredAxis = ThreadLocalRandom.current().nextInt(3);
+        originalOwner.sendMessage("§eYour Dragon Egg is at " + formatBlurredLocation(location, obscuredAxis, "???")
+                + ", held by " + holder.getName());
+        final int[] frames = {0};
+        org.bukkit.scheduler.BukkitTask[] task = new org.bukkit.scheduler.BukkitTask[1];
+        task[0] = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (!originalOwner.isOnline() || frames[0]++ >= 30) {
+                task[0].cancel();
+                return;
+            }
+            String noise = Integer.toString(ThreadLocalRandom.current().nextInt(100, 1000));
+            originalOwner.sendActionBar(Component.text("Your Dragon Egg is at "
+                    + formatBlurredLocation(holder.getLocation(), obscuredAxis, noise)
+                    + ", held by " + holder.getName()));
+        }, 0L, 2L);
+    }
+
+    private String formatBlurredLocation(Location location, int axis, String noise) {
+        return (axis == 0 ? noise : Integer.toString(location.getBlockX())) + ", "
+                + (axis == 1 ? noise : Integer.toString(location.getBlockY())) + ", "
+                + (axis == 2 ? noise : Integer.toString(location.getBlockZ())) + " ("
+                + location.getWorld().getName() + ", " + location.getWorld().getEnvironment().name() + ")";
+    }
+
+    private String formatLocation(Location location) {
+        return location.getBlockX() + ", " + location.getBlockY() + ", " + location.getBlockZ()
+                + " (" + location.getWorld().getName() + ", " + location.getWorld().getEnvironment().name() + ")";
     }
 
     public void saveLocation(Player player) {

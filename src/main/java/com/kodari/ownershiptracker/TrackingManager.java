@@ -124,6 +124,11 @@ public final class TrackingManager {
                 continue;
             }
 
+            if (item.getType().name().equals("DRAGON_EGG")) {
+                returnItem(player, item);
+                continue;
+            }
+
             OwnershipManager.OwnerInfo owner = ownershipManager.getOwner(item);
             if (owner == null || owner.id().equals(player.getUniqueId())) {
                 returnItem(player, item);
@@ -288,6 +293,9 @@ public final class TrackingManager {
     }
 
     private boolean isTrackableBy(Player player, ItemStack item) {
+        if (item != null && item.getType().name().equals("DRAGON_EGG")) {
+            return false;
+        }
         OwnershipManager.OwnerInfo owner = ownershipManager.getOwner(item);
         return owner != null && !owner.id().equals(player.getUniqueId());
     }

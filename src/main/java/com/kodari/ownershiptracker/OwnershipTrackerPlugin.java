@@ -30,6 +30,7 @@ public final class OwnershipTrackerPlugin extends JavaPlugin {
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             for (org.bukkit.entity.Player player : Bukkit.getOnlinePlayers()) {
                 ownershipManager.refreshInventory(player);
+                ownershipManager.tickDragonEggInventory(player);
             }
         }, 20L, 20L);
     }
