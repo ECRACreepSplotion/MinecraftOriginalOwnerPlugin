@@ -1,5 +1,5 @@
 name: OwnershipTracker
-version: 5.0.1
+version: 5.2.0
 main: com.kodari.ownershiptracker.OwnershipTrackerPlugin
 api-version: '1.21.11'
 author: CreepSplotion

@@ -17,6 +17,7 @@ public final class OwnershipTrackerPlugin extends JavaPlugin {
     @Override
     public void onEnable() {
         ownershipManager = new OwnershipManager(this);
+        ownershipManager.initializeDragonEggStateFromPlacedRecords();
         trackingManager = new TrackingManager(this, ownershipManager);
 
         Bukkit.getPluginManager().registerEvents(new OwnershipListener(this, ownershipManager, trackingManager), this);

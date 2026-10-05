@@ -9,6 +9,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.plugin.java.JavaPlugin;
 import net.kyori.adventure.text.Component;
 
@@ -79,6 +80,9 @@ public final class OwnershipManager {
         data.set(ownerIdKey, PersistentDataType.STRING, player.getUniqueId().toString());
         data.set(ownerNameKey, PersistentDataType.STRING, player.getName());
         item.setItemMeta(meta);
+        if (isDragonEgg(item)) {
+            initializeDragonEggState(item, new OwnerInfo(player.getUniqueId(), player.getName()));
+        }
         refreshDisplay(item, player.getUniqueId());
     }
 
@@ -87,11 +91,26 @@ public final class OwnershipManager {
             return null;
         }
 
-        ItemMeta meta = item.getItemMeta();
-        if (meta == null) {
+        if (isDragonEgg(item)) {
+            OwnerInfo savedOwner = getSavedDragonEggOwner();
+            if (savedOwner != null) {
+                return savedOwner;
+            }
+        }
+
+        OwnerInfo itemOwner = getItemOwner(item);
+        if (isDragonEgg(item) && itemOwner != null) {
+            initializeDragonEggState(item, itemOwner);
+        }
+        return itemOwner;
+    }
+
+    private OwnerInfo getItemOwner(ItemStack item) {
+        if (item == null || item.getItemMeta() == null) {
             return null;
         }
 
+        ItemMeta meta = item.getItemMeta();
         PersistentDataContainer data = meta.getPersistentDataContainer();
         String id = data.get(ownerIdKey, PersistentDataType.STRING);
         String name = data.get(ownerNameKey, PersistentDataType.STRING);
@@ -128,6 +147,9 @@ public final class OwnershipManager {
             data.remove(eggRemainingKey);
         }
         item.setItemMeta(meta);
+        if (isDragonEgg(item)) {
+            persistDragonEggOwner(item);
+        }
         refreshDisplay(item, from.getUniqueId());
         return true;
     }
@@ -160,6 +182,17 @@ public final class OwnershipManager {
     }
 
     public List<OwnerInfo> getHistory(ItemStack item) {
+        if (isDragonEgg(item)) {
+            getOwner(item);
+            String savedHistory = plugin.getConfig().getString(eggStatePath("history"));
+            if (savedHistory != null) {
+                return deserializeHistory(savedHistory);
+            }
+        }
+        return getItemHistory(item);
+    }
+
+    private List<OwnerInfo> getItemHistory(ItemStack item) {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
             return List.of();
@@ -170,6 +203,13 @@ public final class OwnershipManager {
             return List.of();
         }
 
+        return deserializeHistory(serialized);
+    }
+
+    private List<OwnerInfo> deserializeHistory(String serialized) {
+        if (serialized == null || serialized.isEmpty()) {
+            return List.of();
+        }
         List<OwnerInfo> history = new ArrayList<>();
         for (String entry : serialized.split(";")) {
             String[] values = entry.split(",", 2);
@@ -207,7 +247,10 @@ public final class OwnershipManager {
             lore.add(0, RETURN_PREFIX + owner.name());
             lore.add(0, STOLEN_STATUS);
             if (isDragonEgg(item)) {
-                Integer remaining = meta.getPersistentDataContainer().get(eggRemainingKey, PersistentDataType.INTEGER);
+                    Integer remaining = plugin.getConfig().getInt(eggStatePath("remaining-seconds"), -1);
+                    if (remaining < 0) {
+                        remaining = meta.getPersistentDataContainer().get(eggRemainingKey, PersistentDataType.INTEGER);
+                    }
                 if (remaining != null) {
                     lore.add(EGG_TIMER_PREFIX + String.format("%02dh %02dm %02ds",
                             remaining / 3600, remaining / 60 % 60, remaining % 60));
@@ -223,6 +266,7 @@ public final class OwnershipManager {
         ItemStack[] contents = player.getInventory().getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
+            restoreDragonEggOwnership(item);
             if (isEligible(item) && getOwner(item) == null) {
                 claimIfUnowned(item, player);
                 player.getInventory().setItem(slot, item);
@@ -243,6 +287,7 @@ public final class OwnershipManager {
             if (!isDragonEgg(item)) {
                 continue;
             }
+            restoreDragonEggOwnership(item);
             OwnerInfo owner = getOwner(item);
             if (owner == null) {
                 continue;
@@ -258,9 +303,13 @@ public final class OwnershipManager {
                 continue;
             }
             PersistentDataContainer data = meta.getPersistentDataContainer();
-            int remaining = Math.max(0, data.getOrDefault(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS) - 1);
+            int remaining = Math.max(0, plugin.getConfig().getInt(eggStatePath("remaining-seconds"), EGG_SECONDS) - 1);
+            plugin.getConfig().set(eggStatePath("remaining-seconds"), remaining);
             data.set(eggRemainingKey, PersistentDataType.INTEGER, remaining);
             item.setItemMeta(meta);
+            if (remaining % 60 == 0) {
+                plugin.saveConfig();
+            }
             if (remaining == 0) {
                 transferDragonEgg(item, owner, player);
             } else if (remaining % 600 == 0) {
@@ -297,17 +346,39 @@ public final class OwnershipManager {
             return;
         }
         PersistentDataContainer data = meta.getPersistentDataContainer();
+        String holderId = plugin.getConfig().getString(eggStatePath("holder-id"));
+        if (holderId == null) {
+            holderId = data.get(eggHolderKey, PersistentDataType.STRING);
+        }
         if (owner.id().equals(player.getUniqueId())) {
-            if (data.has(eggHolderKey, PersistentDataType.STRING)
+            boolean hadTimer = plugin.getConfig().contains(eggStatePath("holder-id"))
+                    || plugin.getConfig().contains(eggStatePath("remaining-seconds"));
+            if (hadTimer || data.has(eggHolderKey, PersistentDataType.STRING)
                     || data.has(eggRemainingKey, PersistentDataType.INTEGER)) {
+                plugin.getConfig().set(eggStatePath("holder-id"), null);
+                plugin.getConfig().set(eggStatePath("remaining-seconds"), null);
                 data.remove(eggHolderKey);
                 data.remove(eggRemainingKey);
                 item.setItemMeta(meta);
+                plugin.saveConfig();
             }
-        } else if (!player.getUniqueId().toString().equals(data.get(eggHolderKey, PersistentDataType.STRING))) {
-            data.set(eggHolderKey, PersistentDataType.STRING, player.getUniqueId().toString());
-            data.set(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS);
-            item.setItemMeta(meta);
+        } else {
+            String currentHolderId = player.getUniqueId().toString();
+            if (!currentHolderId.equals(holderId)) {
+                plugin.getConfig().set(eggStatePath("holder-id"), currentHolderId);
+                plugin.getConfig().set(eggStatePath("remaining-seconds"), EGG_SECONDS);
+                data.set(eggHolderKey, PersistentDataType.STRING, currentHolderId);
+                data.set(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS);
+                item.setItemMeta(meta);
+                plugin.saveConfig();
+            } else {
+                int remaining = plugin.getConfig().getInt(eggStatePath("remaining-seconds"),
+                        data.getOrDefault(eggRemainingKey, PersistentDataType.INTEGER, EGG_SECONDS));
+                plugin.getConfig().set(eggStatePath("remaining-seconds"), remaining);
+                data.set(eggHolderKey, PersistentDataType.STRING, currentHolderId);
+                data.set(eggRemainingKey, PersistentDataType.INTEGER, remaining);
+                item.setItemMeta(meta);
+            }
         }
     }
 
@@ -325,6 +396,12 @@ public final class OwnershipManager {
         data.remove(eggHolderKey);
         data.remove(eggRemainingKey);
         item.setItemMeta(meta);
+        plugin.getConfig().set(eggStatePath("owner-id"), holder.getUniqueId().toString());
+        plugin.getConfig().set(eggStatePath("owner-name"), holder.getName());
+        plugin.getConfig().set(eggStatePath("history"), serializeHistory(history));
+        plugin.getConfig().set(eggStatePath("holder-id"), null);
+        plugin.getConfig().set(eggStatePath("remaining-seconds"), null);
+        plugin.saveConfig();
 
         Player oldOwner = Bukkit.getPlayer(previous.id());
         if (oldOwner != null && oldOwner.isOnline()) {
@@ -398,6 +475,42 @@ public final class OwnershipManager {
         plugin.saveConfig();
     }
 
+    public void initializeDragonEggStateFromPlacedRecords() {
+        if (getSavedDragonEggOwner() != null) {
+            return;
+        }
+        ConfigurationSection placedEggs = plugin.getConfig().getConfigurationSection("placed-dragon-eggs");
+        if (placedEggs == null) {
+            return;
+        }
+        for (String worldId : placedEggs.getKeys(false)) {
+            ConfigurationSection worldSection = placedEggs.getConfigurationSection(worldId);
+            if (worldSection == null) {
+                continue;
+            }
+            for (String x : worldSection.getKeys(false)) {
+                ConfigurationSection xSection = worldSection.getConfigurationSection(x);
+                if (xSection == null) {
+                    continue;
+                }
+                for (String y : xSection.getKeys(false)) {
+                    ConfigurationSection ySection = xSection.getConfigurationSection(y);
+                    if (ySection == null) {
+                        continue;
+                    }
+                    for (String z : ySection.getKeys(false)) {
+                        ItemStack savedEgg = ySection.getItemStack(z);
+                        OwnerInfo owner = getItemOwner(savedEgg);
+                        if (isDragonEgg(savedEgg) && owner != null) {
+                            initializeDragonEggState(savedEgg, owner);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public Location getLastKnownLocation(UUID playerId) {
         Player onlinePlayer = Bukkit.getPlayer(playerId);
         if (onlinePlayer != null) {
@@ -429,6 +542,94 @@ public final class OwnershipManager {
             result.append(owner.id()).append(',').append(owner.name());
         }
         return result.toString();
+    }
+
+    public void restoreDragonEggOwnership(ItemStack item) {
+        if (!isDragonEgg(item)) {
+            return;
+        }
+        OwnerInfo owner = getOwner(item);
+        if (owner == null) {
+            return;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        data.set(ownerIdKey, PersistentDataType.STRING, owner.id().toString());
+        data.set(ownerNameKey, PersistentDataType.STRING, owner.name());
+        String savedHistory = plugin.getConfig().getString(eggStatePath("history"));
+        if (savedHistory == null) {
+            savedHistory = serializeHistory(getItemHistory(item));
+            plugin.getConfig().set(eggStatePath("history"), savedHistory);
+            plugin.saveConfig();
+        }
+        data.set(historyKey, PersistentDataType.STRING, savedHistory);
+
+        String holderId = plugin.getConfig().getString(eggStatePath("holder-id"));
+        Integer remaining = plugin.getConfig().getInt(eggStatePath("remaining-seconds"), -1);
+        if (holderId == null || remaining < 0) {
+            data.remove(eggHolderKey);
+            data.remove(eggRemainingKey);
+        } else {
+            data.set(eggHolderKey, PersistentDataType.STRING, holderId);
+            data.set(eggRemainingKey, PersistentDataType.INTEGER, remaining);
+        }
+        item.setItemMeta(meta);
+    }
+
+    private OwnerInfo getSavedDragonEggOwner() {
+        String id = plugin.getConfig().getString(eggStatePath("owner-id"));
+        String name = plugin.getConfig().getString(eggStatePath("owner-name"));
+        if (id == null || name == null) {
+            return null;
+        }
+        try {
+            return new OwnerInfo(UUID.fromString(id), name);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private void initializeDragonEggState(ItemStack item, OwnerInfo owner) {
+        if (plugin.getConfig().contains(eggStatePath("owner-id"))) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        plugin.getConfig().set(eggStatePath("owner-id"), owner.id().toString());
+        plugin.getConfig().set(eggStatePath("owner-name"), owner.name());
+        plugin.getConfig().set(eggStatePath("history"),
+                data.getOrDefault(historyKey, PersistentDataType.STRING, ""));
+        String holderId = data.get(eggHolderKey, PersistentDataType.STRING);
+        Integer remaining = data.get(eggRemainingKey, PersistentDataType.INTEGER);
+        if (holderId != null && remaining != null) {
+            plugin.getConfig().set(eggStatePath("holder-id"), holderId);
+            plugin.getConfig().set(eggStatePath("remaining-seconds"), remaining);
+        }
+        plugin.saveConfig();
+    }
+
+    private void persistDragonEggOwner(ItemStack item) {
+        OwnerInfo owner = getItemOwner(item);
+        if (owner == null) {
+            return;
+        }
+        plugin.getConfig().set(eggStatePath("owner-id"), owner.id().toString());
+        plugin.getConfig().set(eggStatePath("owner-name"), owner.name());
+        plugin.getConfig().set(eggStatePath("history"), serializeHistory(getItemHistory(item)));
+        plugin.getConfig().set(eggStatePath("holder-id"), null);
+        plugin.getConfig().set(eggStatePath("remaining-seconds"), null);
+        plugin.saveConfig();
+    }
+
+    private String eggStatePath(String key) {
+        return "dragon-egg." + key;
     }
 
     public record OwnerInfo(UUID id, String name) {
