@@ -118,6 +118,7 @@ public final class TrackingManager {
             return;
         }
 
+        boolean exactCoordinates = hasOwnedDragonEgg(player);
         for (int slot : TRACKING_SLOTS) {
             ItemStack item = tracker.getItem(slot);
             if (item == null || item.getType().isAir()) {
@@ -141,7 +142,7 @@ public final class TrackingManager {
                 returnItem(player, item);
             }
             trackingQueues.computeIfAbsent(player.getUniqueId(), ignored -> new ArrayDeque<>())
-                    .addLast(new TrackingRequest(owner, durationSeconds));
+                    .addLast(new TrackingRequest(owner, durationSeconds, exactCoordinates));
         }
         startNextTracking(player.getUniqueId());
     }
@@ -179,13 +180,15 @@ public final class TrackingManager {
             trackingQueues.remove(trackerId);
         }
 
-        Vector initialDirection = snapshotDirection(tracker, owner.id());
-        if (initialDirection == null) {
+        Location initialLocation = ownershipManager.getLastKnownLocation(owner.id());
+        if (initialLocation == null) {
             tracker.sendMessage("§cNo last known position is available for " + owner.name() + ".");
             startNextTracking(trackerId);
             return;
         }
 
+        boolean exactCoordinates = request.exactCoordinates();
+        Vector initialDirection = exactCoordinates ? null : snapshotDirection(tracker, owner.id());
         Vector[] direction = {initialDirection};
         long[] elapsedTicks = {0L};
         BukkitTask task = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
@@ -193,12 +196,21 @@ public final class TrackingManager {
                 return;
             }
             if (elapsedTicks[0] > 0 && elapsedTicks[0] % 1200L == 0) {
-                Vector updatedDirection = snapshotDirection(tracker, owner.id());
-                if (updatedDirection != null) {
-                    direction[0] = updatedDirection;
+                Location updatedLocation = ownershipManager.getLastKnownLocation(owner.id());
+                if (updatedLocation != null) {
+                    if (exactCoordinates) {
+                        tracker.sendMessage("§c" + owner.name() + " is at " + formatExactLocation(updatedLocation) + ".");
+                    } else {
+                        Vector updatedDirection = snapshotDirection(tracker, owner.id());
+                        if (updatedDirection != null) {
+                            direction[0] = updatedDirection;
+                        }
+                    }
                 }
             }
-            drawDirection(tracker.getLocation(), direction[0]);
+            if (!exactCoordinates) {
+                drawDirection(tracker.getLocation(), direction[0]);
+            }
             elapsedTicks[0] += 10L;
         }, 0L, 10L);
 
@@ -216,8 +228,17 @@ public final class TrackingManager {
             currentlyTracking.remove(trackerId);
             startNextTracking(trackerId);
         }, request.durationSeconds() * 20L);
-        tracker.sendMessage("§cTracking " + owner.name() + " for " + request.durationSeconds()
-                + " seconds using their latest position.");
+        if (exactCoordinates) {
+            tracker.sendMessage("§cTracking " + owner.name() + " at " + formatExactLocation(initialLocation)
+                    + " for " + request.durationSeconds() + " seconds.");
+            Player trackedPlayer = Bukkit.getPlayer(owner.id());
+            if (trackedPlayer != null && trackedPlayer.isOnline()) {
+                trackedPlayer.sendMessage("The Dragon Egg Has Set It's Eyes Upon You");
+            }
+        } else {
+            tracker.sendMessage("§cTracking " + owner.name() + " for " + request.durationSeconds()
+                    + " seconds using their latest position.");
+        }
     }
 
     private Vector snapshotDirection(Player tracker, UUID ownerId) {
@@ -231,6 +252,11 @@ public final class TrackingManager {
             direction = origin.getDirection().setY(0);
         }
         return direction.normalize();
+    }
+
+    private String formatExactLocation(Location location) {
+        return location.getX() + ", " + location.getY() + ", " + location.getZ()
+                + " (" + location.getWorld().getName() + ", " + location.getWorld().getEnvironment().name() + ")";
     }
 
     private void drawDirection(Location start, Vector direction) {
@@ -300,6 +326,25 @@ public final class TrackingManager {
         return owner != null && !owner.id().equals(player.getUniqueId());
     }
 
+    private boolean hasOwnedDragonEgg(Player player) {
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (item == null || item.getType().isAir() || !item.getType().name().equals("DRAGON_EGG")) {
+                continue;
+            }
+            OwnershipManager.OwnerInfo owner = ownershipManager.getOwner(item);
+            if (owner != null && owner.id().equals(player.getUniqueId())) {
+                return true;
+            }
+        }
+
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (offhand == null || offhand.getType().isAir() || !offhand.getType().name().equals("DRAGON_EGG")) {
+            return false;
+        }
+        OwnershipManager.OwnerInfo owner = ownershipManager.getOwner(offhand);
+        return owner != null && owner.id().equals(player.getUniqueId());
+    }
+
     private int getTrackingDurationSeconds(ItemStack item) {
         String type = item.getType().name();
         int baseDuration;
@@ -344,6 +389,6 @@ public final class TrackingManager {
         }
     }
 
-    private record TrackingRequest(OwnershipManager.OwnerInfo owner, int durationSeconds) {
+    private record TrackingRequest(OwnershipManager.OwnerInfo owner, int durationSeconds, boolean exactCoordinates) {
     }
 }
