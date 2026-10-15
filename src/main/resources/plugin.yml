@@ -7,10 +7,13 @@ description: Tracks the rightful owner and transfer history of valuable equipmen
 commands:
   ownership:
     description: Manage item ownership and stolen-item tracking.
-    usage: /ownership <transfer|accept|reject|history|track|values>
+    usage: /ownership <transfer|accept|reject|history|track|values|force>
     aliases: [owner, ownershiptracker]
     permission: ownershiptracker.use
 permissions:
   ownershiptracker.use:
     description: Allows using ownership commands.
     default: true
+  ownershiptracker.force:
+    description: Allows forcefully overriding item ownership.
+    default: op

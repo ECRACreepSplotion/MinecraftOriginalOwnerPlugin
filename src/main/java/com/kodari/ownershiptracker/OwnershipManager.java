@@ -32,6 +32,8 @@ public final class OwnershipManager {
     private final NamespacedKey itemIdKey;
     private final NamespacedKey eggHolderKey;
     private final NamespacedKey eggRemainingKey;
+    private final NamespacedKey forcedHolderKey;
+    private final NamespacedKey forcedUnownedKey;
 
     public OwnershipManager(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -41,6 +43,8 @@ public final class OwnershipManager {
         this.itemIdKey = new NamespacedKey(plugin, "item-id");
         this.eggHolderKey = new NamespacedKey(plugin, "dragon-egg-holder");
         this.eggRemainingKey = new NamespacedKey(plugin, "dragon-egg-remaining");
+        this.forcedHolderKey = new NamespacedKey(plugin, "forced-owner-holder");
+        this.forcedUnownedKey = new NamespacedKey(plugin, "forced-unowned");
     }
 
     public JavaPlugin getPlugin() {
@@ -67,7 +71,11 @@ public final class OwnershipManager {
     }
 
     public void claimIfUnowned(ItemStack item, Player player) {
-        if (!isEligible(item) || getOwner(item) != null) {
+        if (!isEligible(item)) {
+            return;
+        }
+        clearForcedOverrideIfHolderChanged(item, player);
+        if (isForcedUnowned(item) || getOwner(item) != null) {
             return;
         }
 
@@ -86,9 +94,67 @@ public final class OwnershipManager {
         refreshDisplay(item, player.getUniqueId());
     }
 
+    public boolean forceOwnership(ItemStack item, Player holder, OwnerInfo owner) {
+        if (!isEligible(item)) {
+            return false;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        data.set(forcedHolderKey, PersistentDataType.STRING, holder.getUniqueId().toString());
+        if (owner == null) {
+            data.set(forcedUnownedKey, PersistentDataType.BYTE, (byte) 1);
+            data.remove(ownerIdKey);
+            data.remove(ownerNameKey);
+            clearOwnershipDisplay(meta);
+            if (isDragonEgg(item)) {
+                plugin.getConfig().set(eggStatePath("owner-id"), null);
+                plugin.getConfig().set(eggStatePath("owner-name"), null);
+                plugin.getConfig().set(eggStatePath("holder-id"), null);
+                plugin.getConfig().set(eggStatePath("remaining-seconds"), null);
+            }
+        } else {
+            data.remove(forcedUnownedKey);
+            data.set(ownerIdKey, PersistentDataType.STRING, owner.id().toString());
+            data.set(ownerNameKey, PersistentDataType.STRING, owner.name());
+        }
+        item.setItemMeta(meta);
+
+        if (isDragonEgg(item)) {
+            if (owner == null) {
+                plugin.saveConfig();
+            } else {
+                persistDragonEggOwner(item);
+            }
+        }
+        if (owner != null) {
+            refreshDisplay(item, owner.id());
+        }
+        return true;
+    }
+
+    public void releaseForcedOwnershipOverride(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        data.remove(forcedHolderKey);
+        data.remove(forcedUnownedKey);
+        item.setItemMeta(meta);
+    }
+
     public OwnerInfo getOwner(ItemStack item) {
         if (!isEligible(item)) {
             return null;
+        }
+
+        if (hasForcedOverride(item)) {
+            return isForcedUnowned(item) ? null : getItemOwner(item);
         }
 
         if (isDragonEgg(item)) {
@@ -266,6 +332,7 @@ public final class OwnershipManager {
         ItemStack[] contents = player.getInventory().getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
+            clearForcedOverrideIfHolderChanged(item, player);
             restoreDragonEggOwnership(item);
             if (isEligible(item) && getOwner(item) == null) {
                 claimIfUnowned(item, player);
@@ -331,6 +398,43 @@ public final class OwnershipManager {
 
     private boolean isDragonEgg(ItemStack item) {
         return item != null && item.getType().name().equals("DRAGON_EGG");
+    }
+
+    private boolean hasForcedOverride(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        return meta != null && meta.getPersistentDataContainer().has(forcedHolderKey, PersistentDataType.STRING);
+    }
+
+    private boolean isForcedUnowned(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        return meta != null && meta.getPersistentDataContainer().getOrDefault(
+                forcedUnownedKey, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
+    }
+
+    private void clearForcedOverrideIfHolderChanged(ItemStack item, Player holder) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        String forcedHolder = data.get(forcedHolderKey, PersistentDataType.STRING);
+        if (forcedHolder == null || forcedHolder.equals(holder.getUniqueId().toString())) {
+            return;
+        }
+
+        data.remove(forcedHolderKey);
+        data.remove(forcedUnownedKey);
+        item.setItemMeta(meta);
+    }
+
+    private void clearOwnershipDisplay(ItemMeta meta) {
+        List<String> lore = meta.hasLore() && meta.getLore() != null
+                ? new ArrayList<>(meta.getLore())
+                : new ArrayList<>();
+        lore.removeIf(line -> line.equals(ORIGINAL_STATUS) || line.equals(STOLEN_STATUS)
+                || line.startsWith(RETURN_PREFIX) || line.startsWith(EGG_TIMER_PREFIX));
+        meta.setLore(lore);
     }
 
     private void updateEggHolder(ItemStack item, Player player) {

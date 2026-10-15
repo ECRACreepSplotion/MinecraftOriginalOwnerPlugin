@@ -5,10 +5,12 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -35,10 +37,46 @@ public final class OwnershipCommand implements CommandExecutor, TabCompleter {
             player.sendMessage("§e/ownership history §7- view previous owners of your held item");
             player.sendMessage("§e/ownership track §7- track owners using stolen equipment");
             player.sendMessage("§e/ownership values §7- view item tracking durations");
+            if (player.hasPermission("ownershiptracker.force")) {
+                player.sendMessage("§e/ownership force <unowned|player> §7- override ownership of your held item");
+            }
             return true;
         }
 
         ItemStack heldItem = player.getInventory().getItemInMainHand();
+        if (args[0].equalsIgnoreCase("force")) {
+            if (!player.hasPermission("ownershiptracker.force")) {
+                player.sendMessage("§cYou don't have permission to use this command.");
+                return true;
+            }
+            if (args.length != 2) {
+                player.sendMessage("§cUsage: /ownership force <unowned|player>");
+                return true;
+            }
+            if (!ownershipManager.isEligible(heldItem)) {
+                player.sendMessage("§cHold an eligible item to force its ownership.");
+                return true;
+            }
+
+            OwnershipManager.OwnerInfo owner = null;
+            if (!args[1].equalsIgnoreCase("unowned")) {
+                OfflinePlayer target = Bukkit.getOfflinePlayer(args[1]);
+                if (!target.isOnline() && !target.hasPlayedBefore()) {
+                    player.sendMessage("§cThat player has not joined this server before.");
+                    return true;
+                }
+                String targetName = target.getName() == null ? args[1] : target.getName();
+                owner = new OwnershipManager.OwnerInfo(target.getUniqueId(), targetName);
+            }
+
+            ownershipManager.forceOwnership(heldItem, player, owner);
+            player.getInventory().setItemInMainHand(heldItem);
+            player.sendMessage(owner == null
+                    ? "§aYour held item is now unowned until its holder changes."
+                    : "§aYour held item's owner is now " + owner.name() + ".");
+            return true;
+        }
+
         if (args[0].equalsIgnoreCase("transfer")) {
             if (args.length != 2) {
                 player.sendMessage("§cUsage: /ownership transfer <player>");
@@ -128,14 +166,25 @@ public final class OwnershipCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        player.sendMessage("§cUsage: /ownership <transfer|accept|reject|history|track|values>");
+        player.sendMessage("§cUsage: /ownership <transfer|accept|reject|history|track|values|force>");
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return List.of("transfer", "accept", "reject", "history", "track", "values");
+            List<String> completions = new ArrayList<>(List.of("transfer", "accept", "reject", "history", "track", "values"));
+            if (sender.hasPermission("ownershiptracker.force")) {
+                completions.add("force");
+            }
+            return completions;
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("force")
+                && sender.hasPermission("ownershiptracker.force")) {
+            List<String> completions = new ArrayList<>();
+            completions.add("unowned");
+            completions.addAll(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList());
+            return completions;
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("transfer")) {
             return Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();

@@ -24,6 +24,7 @@ import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerPickupItemEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
@@ -65,6 +66,14 @@ public final class OwnershipListener implements Listener {
         droppedItem.setItemStack(item);
         plugin.getServer().getScheduler().runTask(plugin,
                 () -> ownershipManager.refreshInventory(event.getPlayer()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDrop(PlayerDropItemEvent event) {
+        Item droppedItem = event.getItemDrop();
+        ItemStack item = droppedItem.getItemStack();
+        ownershipManager.releaseForcedOwnershipOverride(item);
+        droppedItem.setItemStack(item);
     }
 
     @EventHandler
@@ -253,6 +262,7 @@ public final class OwnershipListener implements Listener {
     private void dropTrackedEgg(Location location, ItemStack item) {
         ItemStack dropped = item.clone();
         dropped.setAmount(1);
+        ownershipManager.releaseForcedOwnershipOverride(dropped);
         location.getWorld().dropItemNaturally(location, dropped);
     }
 
