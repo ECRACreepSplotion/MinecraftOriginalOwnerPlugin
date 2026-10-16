@@ -1,4 +1,4 @@
-                                                    **THIS IS THE 26.3 VERSION OF THE PLUGIN**
+                                           **THIS IS THE 26.3 VERSION OF THE PLUGIN**
 
 **OwnershipTracker** is a **Minecraft Paper plugin** designed to create a persistent ownership and theft system for **valuable equipment**.
 
