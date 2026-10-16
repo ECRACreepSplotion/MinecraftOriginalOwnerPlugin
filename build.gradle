@@ -10,9 +10,21 @@ repositories {
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
 }
 
+sourceSets {
+    minecraft26_3 {
+        java.srcDirs = sourceSets.main.java.srcDirs
+        resources.setSrcDirs([])
+    }
+}
+
+configurations {
+    minecraft26_3Implementation.extendsFrom implementation
+}
+
 dependencies {
     compileOnly 'io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT'
     implementation 'com.github.cryptomorin:XSeries:13.3.3'
+    minecraft26_3CompileOnly 'io.papermc.paper:paper-api:26.3.+'
 }
 
 java {
@@ -24,4 +36,27 @@ java {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 21
+}
+
+tasks.named('compileMinecraft26_3Java', JavaCompile).configure {
+    javaCompiler = javaToolchains.compilerFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+tasks.named('processMinecraft26_3Resources') {
+    from('src/main/resources') {
+        exclude 'plugin.yml'
+    }
+    from('src/minecraft26_3/resources')
+}
+
+tasks.register('minecraft26_3Jar', Jar) {
+    dependsOn tasks.named('minecraft26_3Classes')
+    archiveClassifier = 'mc26.3'
+    from sourceSets.minecraft26_3.output
+}
+
+tasks.named('assemble') {
+    dependsOn tasks.named('minecraft26_3Jar')
 }
