@@ -1,4 +1,4 @@
-**OwnershipTracker** is a **Minecraft Paper plugin** designed to create a persistent ownership and theft system for **valuable equipment**.
+**OwnershipTracker** is a **Minecraft Paper plugin** designed to create a persistent ownership and theft system for **valuable equipment** **(Currently available for versions 1.21.11 and 26.3)**.
 
 Certain valuable Minecraft items are assigned a rightful owner when they first come into a player's possession. If another player possesses that item, the plugin identifies it as **stolen**, records the ownership history, and provides mechanics for **transferring ownership** or **tracking down** the rightful owner. 
 
