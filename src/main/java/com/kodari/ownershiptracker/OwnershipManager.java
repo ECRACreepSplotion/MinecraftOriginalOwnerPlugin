@@ -529,7 +529,8 @@ public final class OwnershipManager {
             return;
         }
         Location location = holder.getLocation();
-        if (holder.getActivePotionEffects().stream().noneMatch(effect -> effect.getType().getName().equalsIgnoreCase("INVISIBILITY"))) {
+        if (holder.getActivePotionEffects().stream().noneMatch(effect ->
+                effect.getType().getKey().getKey().equalsIgnoreCase("invisibility"))) {
             originalOwner.sendMessage("§eYour Dragon Egg is at " + formatLocation(location) + ", held by " + holder.getName());
             return;
         }
