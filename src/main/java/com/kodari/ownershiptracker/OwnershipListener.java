@@ -12,6 +12,7 @@ import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.entity.Item;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.ItemSpawnEvent;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -23,7 +24,6 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerPickupItemEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -57,15 +57,18 @@ public final class OwnershipListener implements Listener {
     }
 
     @EventHandler
-    public void onPickup(PlayerPickupItemEvent event) {
+    public void onPickup(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
         Item droppedItem = event.getItem();
         ItemStack item = droppedItem.getItemStack();
         ownershipManager.restoreDragonEggOwnership(item);
-        ownershipManager.claimIfUnowned(item, event.getPlayer());
+        ownershipManager.claimIfUnowned(item, player);
         ownershipManager.restoreDragonEggOwnership(item);
         droppedItem.setItemStack(item);
         plugin.getServer().getScheduler().runTask(plugin,
-                () -> ownershipManager.refreshInventory(event.getPlayer()));
+                () -> ownershipManager.refreshInventory(player));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
