@@ -19,8 +19,10 @@ public final class OwnershipTrackerPlugin extends JavaPlugin {
         ownershipManager = new OwnershipManager(this);
         ownershipManager.initializeDragonEggStateFromPlacedRecords();
         trackingManager = new TrackingManager(this, ownershipManager);
+        OwnershipAdvancements advancements = new OwnershipAdvancements(this, ownershipManager);
 
         Bukkit.getPluginManager().registerEvents(new OwnershipListener(this, ownershipManager, trackingManager), this);
+        Bukkit.getPluginManager().registerEvents(advancements, this);
 
         OwnershipCommand ownershipCommand = new OwnershipCommand(ownershipManager, trackingManager);
         PluginCommand command = Objects.requireNonNull(getCommand("ownership"));
@@ -32,7 +34,9 @@ public final class OwnershipTrackerPlugin extends JavaPlugin {
             for (org.bukkit.entity.Player player : Bukkit.getOnlinePlayers()) {
                 ownershipManager.refreshInventory(player);
                 ownershipManager.tickDragonEggInventory(player);
+                advancements.observeInventory(player);
             }
+            advancements.awardOnlinePlayers();
         }, 20L, 20L);
     }
 
